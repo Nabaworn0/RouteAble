@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /accessibilityPoints/{pointId} {
+      function signedIn() {
+        return request.auth != null;
+      }
+
+      function hasValidPointShape() {
+        return request.resource.data.keys().hasAll([
+          'category', 'kind', 'title', 'location', 'coordinate', 'status',
+          'description', 'color', 'symbol', 'sourceLabel', 'sourceUrl',
+          'ownerId', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.category in ['facility', 'obstacle']
+        && request.resource.data.kind in ['path', 'ramp', 'elevator', 'stairs', 'surface']
+        && request.resource.data.status in ['available', 'caution', 'unavailable']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.location is string
+        && request.resource.data.location.size() <= 120
+        && request.resource.data.coordinate.latitude is number
+        && request.resource.data.coordinate.longitude is number
+        && request.resource.data.ownerId == request.auth.uid;
+      }
+
+      allow read: if true;
+      allow create: if signedIn() && hasValidPointShape();
+      allow update: if signedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && hasValidPointShape();
+      allow delete: if signedIn() && pointId.matches('^user-point-.*$');
+    }
+  }
+}
