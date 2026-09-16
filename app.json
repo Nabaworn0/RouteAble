@@ -1,13 +1,16 @@
 {
   "expo": {
     "name": "RouteAble",
-    "slug": "routeable",
+    "slug": "routeable-map",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "routeable",
     "userInterfaceStyle": "automatic",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.em.routeable"
@@ -21,11 +24,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.em.routeable",
-       "config": {
+      "config": {
         "googleMaps": {
           "apiKey": ""
         }
-      }      
+      }
     },
     "plugins": [
       [
@@ -54,6 +57,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "33ca4043-b897-42a9-8815-745ff08edd4f"
+      }
+    },
+    "owner": "nabaworntct"
   }
 }
