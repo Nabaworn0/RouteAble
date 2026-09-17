@@ -23,21 +23,10 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.em.routeable",
-      "config": {
-        "googleMaps": {
-          "apiKey": ""
-        }
-      }
+      "package": "com.em.routeable"
     },
     "plugins": [
-      [
-        "react-native-maps",
-        {
-          "androidGoogleMapsApiKey": "",
-          "iosGoogleMapsApiKey": ""
-        }
-      ],
+      "@maplibre/maplibre-react-native",
       "expo-router",
       [
         "expo-location",

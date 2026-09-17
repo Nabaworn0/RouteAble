@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams } from 'expo-router';
 import { Alert, Animated, Easing, Keyboard, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE, type MapPressEvent, type Region } from 'react-native-maps';
+import { Camera, GeoJSONSource, Layer, Map, Marker, type CameraRef, type PressEvent } from '@maplibre/maplibre-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomNav } from '../components/BottomNav';
 import { COLORS } from '../constants/theme';
@@ -13,7 +13,7 @@ import { distanceInMetres, formatDistance } from '../utils/distance';
 
 type Filter = 'buildings' | MarkerCategory;
 type NewPointKind = 'path' | 'ramp' | 'elevator' | 'stairs' | 'surface';
-type MapDisplayType = 'standard' | 'satellite' | 'terrain';
+type MapDisplayType = 'default' | 'light' | 'dark';
 const DEMO_POSITION: Coordinates = { latitude: 13.81965, longitude: 100.51472 };
 const USER_MARKERS_STORAGE_KEY = '@routeable/user-markers/v1';
 const ACCESSIBLE_KINDS = new Set(['path', 'ramp', 'elevator', 'toilet']);
@@ -21,18 +21,15 @@ const filters: { id: Filter; label: string }[] = [
   { id: 'buildings', label: 'Buildings' }, { id: 'facility', label: '♿︎ Access' }, { id: 'obstacle', label: '⚠ Barriers' },
 ];
 const MAP_TYPE_OPTIONS: { id: MapDisplayType; label: string }[] = [
-  { id: 'standard', label: 'Default' },
-  { id: 'satellite', label: 'Satellite' },
-  { id: 'terrain', label: 'Terrain' },
+  { id: 'default', label: 'Default' },
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
 ];
-
-const MAP_STYLE = [
-  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
-  { featureType: 'transit', elementType: 'labels.icon', stylers: [{ visibility: 'off' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#BDEAF0' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#D9E4E5' }] },
-];
+const MAP_STYLE_URLS: Record<MapDisplayType, string> = {
+  default: 'https://tiles.openfreemap.org/styles/liberty',
+  light: 'https://tiles.openfreemap.org/styles/bright',
+  dark: 'https://tiles.openfreemap.org/styles/dark',
+};
 
 const NEW_POINT_OPTIONS: { kind: NewPointKind; label: string; symbol: string; color: string; category: MarkerCategory }[] = [
   { kind: 'path', label: 'Wheelchair path', symbol: '♿︎', color: '#168B79', category: 'facility' },
@@ -113,7 +110,7 @@ function createUserPointId() {
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { markerId } = useLocalSearchParams<{ markerId?: string }>();
-  const mapRef = useRef<MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
   const [sheetEntrance] = useState(() => new Animated.Value(0));
   const userMarkersRef = useRef<CampusMarker[]>([]);
   const { position, state: locationState, retry } = useCurrentLocation();
@@ -133,8 +130,9 @@ export default function MapScreen() {
   const [storageReady, setStorageReady] = useState(false);
   const [firebaseOwnerId, setFirebaseOwnerId] = useState<string | null>(null);
   const [cloudSyncState, setCloudSyncState] = useState<'local' | 'connecting' | 'synced' | 'error'>(isFirebaseConfigured ? 'connecting' : 'local');
-  const [mapType, setMapType] = useState<MapDisplayType>('standard');
+  const [mapType, setMapType] = useState<MapDisplayType>('default');
   const [mapTypeMenuOpen, setMapTypeMenuOpen] = useState(false);
+  const [mapZoom, setMapZoom] = useState(16.8);
 
   useEffect(() => {
     let active = true;
@@ -254,19 +252,14 @@ export default function MapScreen() {
   }), [allMarkers]);
 
   const moveMapTo = (coordinate: Coordinates, delta = 0.0016) => {
-    const region: Region = { ...coordinate, latitudeDelta: delta, longitudeDelta: delta * 0.82 };
-    mapRef.current?.animateToRegion(region, 650);
+    const zoom = delta <= 0.0008 ? 18.3 : delta <= 0.0016 ? 17.2 : 15.2;
+    setMapZoom(zoom);
+    cameraRef.current?.easeTo({ center: [coordinate.longitude, coordinate.latitude], zoom, duration: 650 });
   };
-  const changeMapZoom = async (step: number) => {
-    const map = mapRef.current;
-    if (!map) return;
-    try {
-      const camera = await map.getCamera();
-      const nextZoom = Math.min(21, Math.max(14, (camera.zoom ?? 17) + step));
-      map.animateCamera({ ...camera, zoom: nextZoom }, { duration: 260 });
-    } catch {
-      // The map can briefly be unavailable while the native view is mounting.
-    }
+  const changeMapZoom = (step: number) => {
+    const nextZoom = Math.min(21, Math.max(14, mapZoom + step));
+    setMapZoom(nextZoom);
+    cameraRef.current?.zoomTo(nextZoom, { duration: 260 });
   };
   const selectMarker = (marker: CampusMarker) => {
     setSearchFocused(false);
@@ -291,14 +284,14 @@ export default function MapScreen() {
     setDraftLocationNote('');
     setIsAddingPoint(true);
   };
-  const placeDraftPoint = (event: MapPressEvent) => {
+  const placeDraftPoint = (event: PressEvent) => {
     if (!isAddingPoint) return;
-    setDraftCoordinate(event.nativeEvent.coordinate);
+    setDraftCoordinate({ longitude: event.lngLat[0], latitude: event.lngLat[1] });
   };
-  const handleMapPress = (event: MapPressEvent) => {
+  const handleMapPress = (event: { nativeEvent: PressEvent }) => {
     setSearchFocused(false);
     Keyboard.dismiss();
-    placeDraftPoint(event);
+    placeDraftPoint(event.nativeEvent);
   };
   const saveDraftPoint = () => {
     if (!draftCoordinate) return;
@@ -396,10 +389,12 @@ export default function MapScreen() {
       moveMapTo(marker.coordinate);
       return;
     }
-    mapRef.current?.fitToCoordinates([position, marker.coordinate], {
-      animated: true,
-      edgePadding: { top: 230, right: 72, bottom: 270, left: 72 },
-    });
+    cameraRef.current?.fitBounds([
+      Math.min(position.longitude, marker.coordinate.longitude),
+      Math.min(position.latitude, marker.coordinate.latitude),
+      Math.max(position.longitude, marker.coordinate.longitude),
+      Math.max(position.latitude, marker.coordinate.latitude),
+    ], { padding: { top: 230, right: 72, bottom: 270, left: 72 }, duration: 650 });
   };
   const setDestination = (marker: CampusMarker) => {
     setSearchFocused(false);
@@ -486,15 +481,12 @@ export default function MapScreen() {
 
   return (
     <View style={styles.screen}>
-      <MapView customMapStyle={mapType === 'standard' ? MAP_STYLE : undefined} initialRegion={KMUTNB_CAMPUS_REGION} mapPadding={{ top: 210, right: 12, bottom: selectedMarker ? selectedAccessProfile.length ? detailsExpanded ? 470 : 330 : 390 : draftCoordinate ? 335 : destinationMarker ? 290 : 150, left: 12 }} mapType={mapType} onPress={handleMapPress} provider={PROVIDER_GOOGLE} ref={mapRef} showsCompass={false} showsMyLocationButton={false} showsUserLocation={locationState === 'ready'} style={StyleSheet.absoluteFill} toolbarEnabled={false}>
+      <Map attribution attributionPosition={{ bottom: 12, left: 12 }} compass={false} logo={false} mapStyle={MAP_STYLE_URLS[mapType]} onPress={handleMapPress} style={StyleSheet.absoluteFill}>
+        <Camera initialViewState={{ center: [KMUTNB_CAMPUS_CENTER.longitude, KMUTNB_CAMPUS_CENTER.latitude], zoom: 16.8 }} maxZoom={21} minZoom={14} ref={cameraRef} />
         {detailsExpanded && selectedMarker ? relatedAccessMarkers.map((marker) => (
-          <Polyline
-            coordinates={[marker.coordinate, spreadAccessCoordinate(marker, selectedMarker)]}
-            key={`access-link-${marker.id}`}
-            lineDashPattern={[5, 5]}
-            strokeColor="#607D83"
-            strokeWidth={2}
-          />
+          <GeoJSONSource data={{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[marker.coordinate.longitude, marker.coordinate.latitude], [spreadAccessCoordinate(marker, selectedMarker).longitude, spreadAccessCoordinate(marker, selectedMarker).latitude]] } }} id={`access-link-source-${marker.id}`} key={`access-link-${marker.id}`}>
+            <Layer id={`access-link-layer-${marker.id}`} type="line" style={{ lineCap: 'round', lineColor: '#607D83', lineDasharray: [2, 2], lineWidth: 2 }} />
+          </GeoJSONSource>
         )) : null}
         {visibleMarkers.map((marker) => {
           const isLandmark = marker.kind === 'building' || marker.kind === 'library' || marker.kind === 'canteen';
@@ -503,16 +495,16 @@ export default function MapScreen() {
           const isExpandedAccessPoint = Boolean(detailsExpanded && selectedMarker && marker.buildingId === selectedMarker.id);
           const markerCoordinate = isExpandedAccessPoint && selectedMarker ? spreadAccessCoordinate(marker, selectedMarker) : marker.coordinate;
           return (
-            <Marker accessibilityLabel={`${marker.title}, ${marker.kind}, ${statusLabel(marker.status)}`} coordinate={markerCoordinate} key={`${marker.id}-${isSelected ? 'selected' : isDestination ? 'destination' : 'default'}`} onPress={() => { if (!isAddingPoint) selectMarker(marker); }} zIndex={isSelected || isDestination ? 12 : isExpandedAccessPoint ? 10 : marker.category === 'obstacle' ? 8 : 5}>
+            <Marker accessibilityLabel={`${marker.title}, ${marker.kind}, ${statusLabel(marker.status)}`} anchor="bottom" id={marker.id} key={`${marker.id}-${isSelected ? 'selected' : isDestination ? 'destination' : 'default'}`} lngLat={[markerCoordinate.longitude, markerCoordinate.latitude]} onPress={() => { if (!isAddingPoint) selectMarker(marker); }}>
               <View style={[styles.markerPin, isLandmark && styles.buildingPin, marker.category === 'obstacle' && styles.obstaclePin, isDestination && styles.destinationPin, isSelected && styles.selectedPin, { backgroundColor: marker.color }]}>
                 <Text style={[styles.markerSymbol, marker.symbol.length > 2 && styles.compactSymbol]}>{marker.symbol}</Text>
               </View>
             </Marker>
           );
         })}
-        {draftCoordinate ? <Marker coordinate={draftCoordinate} zIndex={20}><View style={styles.draftMarker}><Text style={styles.draftMarkerText}>+</Text></View></Marker> : null}
-        {!position ? <Marker coordinate={DEMO_POSITION} description="Used until GPS is available" title="Demo position"><View style={styles.demoMarker}><View style={styles.demoMarkerCore} /></View></Marker> : null}
-      </MapView>
+        {draftCoordinate ? <Marker anchor="center" id="draft-accessibility-point" lngLat={[draftCoordinate.longitude, draftCoordinate.latitude]}><View style={styles.draftMarker}><Text style={styles.draftMarkerText}>+</Text></View></Marker> : null}
+        <Marker anchor="center" id="current-or-demo-position" lngLat={[(position ?? DEMO_POSITION).longitude, (position ?? DEMO_POSITION).latitude]}><View style={styles.demoMarker}><View style={styles.demoMarkerCore} /></View></Marker>
+      </Map>
 
       <View style={[styles.header, { top: insets.top + 10 }]}>
         <View style={styles.brandMark}><Text style={styles.brandLetter}>R</Text></View>
